@@ -1295,6 +1295,8 @@ int of_overlay_notifier_register(struct notifier_block *nb);
 int of_overlay_notifier_unregister(struct notifier_block *nb);
 
 int of_overlay_create_indirect(struct device_node *tree, const char *id);
+int of_overlay_create_target_root(struct device_node *tree,
+		struct device_node *target_root);
 
 #else
 
@@ -1325,6 +1327,12 @@ static inline int of_overlay_notifier_unregister(struct notifier_block *nb)
 
 static inline int of_overlay_create_indirect(struct device_node *tree,
 		const char *id)
+{
+	return -ENOTSUPP;
+}
+
+static inline int of_overlay_create_target_root(struct device_node *tree,
+		struct device_node *target_root)
 {
 	return -ENOTSUPP;
 }
