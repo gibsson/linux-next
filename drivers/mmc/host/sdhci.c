@@ -2242,8 +2242,7 @@ static void __sdhci_execute_tuning(struct sdhci_host *host, u32 opcode)
 		}
 
 		/* Spec does not require a delay between tuning cycles */
-		if (host->tuning_delay > 0)
-			mdelay(host->tuning_delay);
+		mdelay(host->tuning_delay);
 	}
 
 	pr_info("%s: Tuning failed, falling back to fixed sampling clock\n",
