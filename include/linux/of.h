@@ -1282,14 +1282,14 @@ static inline int of_changeset_create_device_node(struct of_changeset *ocs,
 	return -EINVAL;
 }
 
-int of_changeset_add_property_copy(struct of_changeset *ocs,
+static inline int of_changeset_add_property_copy(struct of_changeset *ocs,
 	struct device_node *np, const char *name,
 	const void *value, int length)
 {
 	return -EINVAL;
 }
 
-int of_changeset_add_property_string(struct of_changeset *ocs,
+static inline int of_changeset_add_property_string(struct of_changeset *ocs,
 	struct device_node *np, const char *name, const char *str)
 {
 	return -EINVAL;
