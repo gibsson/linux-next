@@ -104,12 +104,23 @@ struct tc358840_state {
 	bool test_pattern_changed;
 	bool test_dl;
 	unsigned int retry_attempts_stats[6];
+	bool hdcp_repeater_ready;
+	bool hdcp_enabled;
 
 	/* controls */
 	struct v4l2_ctrl *detect_tx_5v_ctrl;
 	struct v4l2_ctrl *audio_sampling_rate_ctrl;
 	struct v4l2_ctrl *audio_present_ctrl;
 	struct v4l2_ctrl *tmds_present_ctrl;
+	struct v4l2_ctrl *hdcp_present_ctrl;
+	struct v4l2_ctrl *hdcp_enable_ctrl;
+	struct v4l2_ctrl *hdcp_repeater_ctrl;
+	struct v4l2_ctrl *hdcp_depth_ctrl;
+	struct v4l2_ctrl *hdcp_device_count_ctrl;
+	struct v4l2_ctrl *hdcp_max_devs_exceeded_ctrl;
+	struct v4l2_ctrl *hdcp_max_cascade_exceeded_ctrl;
+	struct v4l2_ctrl *hdcp_ksvfifo_ctrl;
+	struct v4l2_ctrl *hdcp_repeater_ready_ctrl;
 	struct v4l2_ctrl *rgb_quantization_range_ctrl;
 	struct v4l2_ctrl *splitter_width_ctrl;
 	struct v4l2_ctrl *test_pattern_ctrl;
@@ -383,17 +394,62 @@ static void tc358840_delayed_work_enable_hotplug(struct work_struct *work)
 static void tc358840_set_hdmi_hdcp(struct v4l2_subdev *sd, bool enable)
 {
 	int i;
+	struct tc358840_state *state = to_state(sd);
 
 	v4l2_info(sd, "%s: %s\n", __func__, enable ?  "enable" : "disable");
+
+	state->hdcp_repeater_ready = false;
 
 	/* Disable the HDCP repeater ready flag */
 	i2c_wr8_and_or(sd, BCAPS, ~(u8)MASK_READY, 0);
 
-	i2c_wr8_and_or(sd, HDCP_MODE, ~(u8)MASK_MANUAL_AUTHENTICATION,
-		       MASK_MANUAL_AUTHENTICATION);
-	i2c_wr8(sd, HDCP_BKSV, 0);
-	for (i = 0; i < 5; i++)
-		i2c_wr8(sd, BKSV + i, 0);
+	if (enable) {
+		/*
+		 * Instruct the chip to load BKSV and keys from eFuse area
+		 * into register file for DDC master to access. When we
+		 * disable HDCP we set HDCP_BKSV and the BKSV registers
+		 * to 0x00.
+		 */
+		i2c_wr8(sd, HDCP_BKSV, MASK_LOAD_BKSV);
+
+		if (state->pdata.hdcp_repeater) {
+			v4l2_info(sd,
+				  "%s: hdcp repeater authentication\n",
+				  __func__);
+
+			state->hdcp_enabled = true;
+
+			/* Set the bcaps repeater flag and disable the ready
+			 * flag
+			 */
+			i2c_wr8_and_or(sd,
+				       BCAPS,
+				       ~(u8)MASK_REPEATER,
+				       MASK_REPEATER);
+
+			/* Manual repeater authentication */
+			i2c_wr8_and_or(sd,
+				       HDCP_MODE,
+				       ~(u8)MASK_MANUAL_AUTHENTICATION,
+				       MASK_MANUAL_AUTHENTICATION);
+		} else {
+			v4l2_info(sd,
+				  "%s: hdcp receiver authentication\n",
+				  __func__);
+
+			i2c_wr8_and_or(sd,
+				       HDCP_MODE,
+				       ~(u8)MASK_MANUAL_AUTHENTICATION,
+				       0);
+		}
+	} else {
+		state->hdcp_enabled = false;
+		i2c_wr8_and_or(sd, HDCP_MODE, ~(u8)MASK_MANUAL_AUTHENTICATION,
+			       MASK_MANUAL_AUTHENTICATION);
+		i2c_wr8(sd, HDCP_BKSV, 0);
+		for (i = 0; i < 5; i++)
+			i2c_wr8(sd, BKSV + i, 0);
+	}
 }
 
 static void tc358840_disable_hpd(struct v4l2_subdev *sd)
@@ -1589,8 +1645,10 @@ static void tc358840_delayed_work_poll(struct work_struct *work)
 		 * Don't rely on some global setting, actually read the
 		 * register here. This in case someone has been hacking.
 		 */
-		have_hdcp = !(i2c_rd8(sd, HDCP_MODE) &
-			      MASK_MANUAL_AUTHENTICATION);
+		if (state->pdata.hdcp_repeater)
+			have_hdcp = (i2c_rd8(sd, BCAPS) & MASK_READY);
+		else
+			have_hdcp = !(i2c_rd8(sd, HDCP_MODE) & MASK_MANUAL_AUTHENTICATION);
 	}
 
 	if (!have_5v) {
@@ -1713,8 +1771,13 @@ static void tc358840_delayed_work_poll(struct work_struct *work)
 	}
 	mutex_unlock(&state->lock);
 	v4l2_ctrl_s_ctrl(state->tmds_present_ctrl, have_signal);
+	v4l2_ctrl_s_ctrl(state->hdcp_present_ctrl, have_hdcp);
 	v4l2_ctrl_s_ctrl(state->detect_tx_5v_ctrl, have_5v);
 	v4l2_ctrl_s_ctrl(state->audio_present_ctrl, audio_present(sd));
+
+	if (state->pdata.enable_hdcp)
+		v4l2_ctrl_s_ctrl(state->hdcp_repeater_ctrl,
+				 state->pdata.hdcp_repeater);
 
 	if (have_signal)
 		v4l2_ctrl_s_ctrl(state->audio_sampling_rate_ctrl,
@@ -1755,6 +1818,8 @@ static void tc358840_enable_interrupts(struct v4l2_subdev *sd,
 
 	i2c_wr8(sd, SYS_INTM, ~MASK_DDC & 0xff);
 	if (cable_connected) {
+		struct tc358840_state *state = to_state(sd);
+
 		if (no_signal(sd) || no_sync(sd)) {
 			i2c_wr8(sd, CBIT_INTM,
 				~(MASK_AF_LOCK | MASK_AF_UNLOCK) & 0xff);
@@ -1763,6 +1828,11 @@ static void tc358840_enable_interrupts(struct v4l2_subdev *sd,
 			i2c_wr8(sd, CBIT_INTM, ~(MASK_CBIT_FS | MASK_AF_LOCK |
 						 MASK_AF_UNLOCK) & 0xff);
 			i2c_wr8(sd, AUDIO_INTM, ~MASK_BUFINIT_END);
+		}
+
+		if (state->pdata.hdcp_repeater) {
+			i2c_wr8(sd, HDCP_INTM, ~(u8)(MASK_AKSV_END | MASK_R0_END |
+						     MASK_KM_END | MASK_SHA_END));
 		}
 	} else {
 		i2c_wr8(sd, CBIT_INTM, 0xff);
@@ -1798,6 +1868,8 @@ static void tc358840_hdmi_audio_int_handler(struct v4l2_subdev *sd,
 static void tc358840_hdmi_hdcp_int_handler(struct v4l2_subdev *sd,
 					   bool *handled)
 {
+	struct tc358840_state *state = to_state(sd);
+
 	u8 hdcp_int_mask = i2c_rd8(sd, HDCP_INTM);
 	u8 hdcp_int = i2c_rd8(sd, HDCP_INT);
 
@@ -1805,6 +1877,62 @@ static void tc358840_hdmi_hdcp_int_handler(struct v4l2_subdev *sd,
 	hdcp_int &= ~hdcp_int_mask;
 
 	v4l2_dbg(3, debug, sd, "%s: HDCP_INT = 0x%02x\n", __func__, hdcp_int);
+
+	if ((hdcp_int & MASK_SHA_END) && state->pdata.hdcp_repeater) {
+		struct tc358840_state *state = to_state(sd);
+
+		v4l2_dbg(1, debug, sd,
+			 "%s: HDCP MASK_SHA_END (V' calculated)\n", __func__);
+
+		if (state->hdcp_repeater_ready) {
+			v4l2_info(sd, "hdcp write ready bit\n");
+
+			/* set the bcaps ksvfifo ready */
+			i2c_wr8_and_or(sd, BCAPS, ~MASK_READY, MASK_READY);
+		}
+
+		hdcp_int &= ~MASK_SHA_END;
+
+		if (handled)
+			*handled = true;
+	}
+	if ((hdcp_int & MASK_AKSV_END) && state->pdata.hdcp_repeater) {
+		v4l2_dbg(1, debug, sd,
+			 "%s: HDCP MASK_AKSV_END\n", __func__);
+
+		if (state->hdcp_enabled)
+			i2c_wr8_and_or(sd, HDCP_CMD, ~MASK_CALKM, MASK_CALKM);
+
+		hdcp_int &= ~MASK_AKSV_END;
+
+		if (handled)
+			*handled = true;
+	}
+	if ((hdcp_int & MASK_R0_END) && state->pdata.hdcp_repeater) {
+		struct tc358840_state *state = to_state(sd);
+
+		v4l2_dbg(1, debug, sd,
+			 "%s: HDCP MASK_R0_END\n", __func__);
+
+		if (state->hdcp_repeater_ready)
+			i2c_wr8_and_or(sd, HDCP_CMD, ~MASK_SHAS, MASK_SHAS);
+
+		hdcp_int &= ~MASK_R0_END;
+
+		if (handled)
+			*handled = true;
+	}
+	if ((hdcp_int & MASK_KM_END) && state->pdata.hdcp_repeater) {
+		v4l2_dbg(1, debug, sd,
+			 "%s: HDCP MASK_KM_END\n", __func__);
+
+		i2c_wr8_and_or(sd, HDCP_CMD, ~MASK_CALPARAM, MASK_CALPARAM);
+
+		hdcp_int &= ~MASK_KM_END;
+
+		if (handled)
+			*handled = true;
+	}
 
 	if (hdcp_int) {
 		v4l2_err(sd, "%s: Unhandled HDCP_INT interrupts: 0x%02x\n",
@@ -2714,6 +2842,79 @@ static int tc358840_s_ctrl(struct v4l2_ctrl *ctrl)
 			mutex_unlock(&state->lock);
 		}
 		break;
+	case V4L2_CID_DV_HDCP_ENABLE:
+		v4l2_subdev_notify_event(sd, &tc358840_ev_fmt);
+		v4l2_info(sd, "event: %s HDCP\n",
+			  ctrl->val ? "enable" : "disable");
+		mutex_lock(&state->lock);
+		tc358840_disable_hpd(sd);
+		tc358840_set_hdmi_hdcp(sd, ctrl->val);
+		if (tx_5v_power_present(sd))
+			tc358840_enable_hpd(sd);
+		mutex_unlock(&state->lock);
+		break;
+	case V4L2_CID_DV_HDCP_MAXCASCADE_EXCEEDED:
+		v4l2_dbg(2, debug, sd, "%s: hdcp max cascade exceeded %s\n",
+			 __func__, ctrl->val ? "true" : "false");
+		i2c_wr8_and_or(sd,
+			       BSTATUS1,
+			       ~MASK_MAX_EXCED,
+			       ctrl->val ? MASK_MAX_EXCED : 0);
+		break;
+	case V4L2_CID_DV_HDCP_MAXDEVS_EXCEEDED:
+		v4l2_dbg(2, debug, sd, "%s: hdcp max devs exceeded %s\n",
+			 __func__, ctrl->val ? "true" : "false");
+		i2c_wr8_and_or(sd,
+			       BSTATUS0,
+			       (~MASK_MAX_DEVEXCED) & 0xff,
+			       ctrl->val ? MASK_MAX_DEVEXCED : 0);
+		break;
+	case V4L2_CID_DV_HDCP_DEPTH:
+		v4l2_dbg(2, debug, sd, "%s: hdcp depth %d\n",
+			 __func__, ctrl->val);
+		i2c_wr8_and_or(sd,
+			       BSTATUS1,
+			       ~MASK_CASCADE_DEPTH,
+			       ctrl->val & MASK_CASCADE_DEPTH);
+		break;
+	case V4L2_CID_DV_HDCP_DEVICE_COUNT:
+		v4l2_dbg(2, debug, sd, "%s: hdcp device count %d\n",
+			 __func__, ctrl->val);
+		i2c_wr8_and_or(sd,
+			       BSTATUS0,
+			       (u8)~MASK_DEVICE_COUNT,
+			       ctrl->val & MASK_DEVICE_COUNT);
+		break;
+	case V4L2_CID_DV_HDCP_KSVFIFO: {
+		/* tc358840 supports up to 16 devices */
+		u8 ksvfifo[16][V4L2_DV_HDCP_KSV_SIZE];
+		size_t j;
+
+		memset(ksvfifo, 0, sizeof(ksvfifo));
+
+		for (j = 0; j < ctrl->elems / V4L2_DV_HDCP_KSV_SIZE; j++) {
+			/* big to little endian (HDCP 1.4) */
+			ksvfifo[j][0] = *(ctrl->p_new.p_u8
+				+ j * V4L2_DV_HDCP_KSV_SIZE + 4);
+			ksvfifo[j][1] = *(ctrl->p_new.p_u8
+				+ j * V4L2_DV_HDCP_KSV_SIZE + 3);
+			ksvfifo[j][2] = *(ctrl->p_new.p_u8
+				+ j * V4L2_DV_HDCP_KSV_SIZE + 2);
+			ksvfifo[j][3] = *(ctrl->p_new.p_u8
+				+ j * V4L2_DV_HDCP_KSV_SIZE + 1);
+			ksvfifo[j][4] = *(ctrl->p_new.p_u8
+				+ j * V4L2_DV_HDCP_KSV_SIZE);
+		}
+
+		v4l2_info(sd, "hdcp write ksvfifo\n");
+
+		i2c_wr(sd, KSVFIFO, (u8 *)ksvfifo, ctrl->elems);
+		break;
+	}
+	case V4L2_CID_DV_HDCP_REPEATER_READY:
+		v4l2_info(sd, "hdcp repeater ready\n");
+		state->hdcp_repeater_ready = true;
+		break;
 	case TC358840_CID_EQ_BYPS_MODE:
 		if (ctrl->val == 0) {
 			state->invalid_eq_bypass[0] = false;
@@ -2811,6 +3012,17 @@ static const struct v4l2_ctrl_config tc358840_ctrl_splitter_width = {
 	.flags = V4L2_CTRL_FLAG_READ_ONLY,
 };
 
+static const struct v4l2_ctrl_config tc358840_ctrl_hdcp_ksvfifo = {
+	.ops = &tc358840_ctrl_ops,
+	.id = V4L2_CID_DV_HDCP_KSVFIFO,
+	.type = V4L2_CTRL_TYPE_U8,
+	.min = 0,
+	.max = 255,
+	.step = 1,
+	.def = 0,
+	.dims = { 16, V4L2_DV_HDCP_KSV_SIZE },
+};
+
 static const char * const eq_byps_menu[] = {
 	"Automatic",
 	"0",
@@ -2859,6 +3071,18 @@ static bool tc358840_parse_dt(struct tc358840_platform_data *pdata,
 	if (ret)
 		goto put_node;
 	pdata->endpoint = endpoint;
+
+	pdata->enable_hdcp = of_property_read_bool(node, "enable_hdcp");
+	v4l_dbg(1, debug, client, "enable_hdcp = %s\n",
+		pdata->enable_hdcp ? "true" : "false");
+
+	pdata->hdcp_repeater = false;
+	if (pdata->enable_hdcp) {
+		pdata->hdcp_repeater =
+			of_property_read_bool(node, "hdcp_repeater");
+		v4l_dbg(1, debug, client, "hdcp_repeater = %s\n",
+			pdata->hdcp_repeater ? "true" : "false");
+	}
 
 	if (of_property_read_u32(node, "refclk_hz", &pdata->refclk_hz) ||
 	    of_property_read_u32(node, "ddc5v_delay", &pdata->ddc5v_delay) ||
@@ -2985,6 +3209,47 @@ static const struct media_entity_operations tc358840_media_ops = {
 #endif
 };
 
+static void create_hdcp_controls(struct tc358840_state *state)
+{
+	state->hdcp_enable_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_ENABLE, 0, 1, 1, 0);
+
+	state->hdcp_repeater_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_REPEATER, 0, 1, 1, 0);
+
+	if (!state->pdata.hdcp_repeater)
+		return;
+
+	state->hdcp_depth_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_DEPTH, 0, 7, 1, 0);
+
+	state->hdcp_device_count_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_DEVICE_COUNT, 0, 16, 1, 0);
+
+	state->hdcp_max_cascade_exceeded_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_MAXCASCADE_EXCEEDED,
+				  0, 1, 1, 0);
+
+	state->hdcp_max_devs_exceeded_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_MAXDEVS_EXCEEDED,
+				  0, 1, 1, 0);
+
+	state->hdcp_ksvfifo_ctrl =
+		v4l2_ctrl_new_custom(&state->hdl,
+				     &tc358840_ctrl_hdcp_ksvfifo,
+				     NULL);
+
+	state->hdcp_repeater_ready_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, &tc358840_ctrl_ops,
+				  V4L2_CID_DV_HDCP_REPEATER_READY, 0, 0, 0, 0);
+}
+
 static void tc358840_reset_gpio(struct tc358840_state *state, bool enable)
 {
 	int reset_gpio = state->pdata.reset_gpio;
@@ -3086,7 +3351,7 @@ static int tc358840_probe(struct i2c_client *client,
 
 	state->detect_tx_5v_ctrl =
 		v4l2_ctrl_new_std(&state->hdl, NULL,
-				  V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 0, 0);
+				  V4L2_CID_DV_RX_POWER_PRESENT, 0, 1, 1, 0);
 
 	ctrl = v4l2_ctrl_new_std_menu(&state->hdl, &tc358840_ctrl_ops,
 				      V4L2_CID_DV_RX_IT_CONTENT_TYPE,
@@ -3123,6 +3388,13 @@ static int tc358840_probe(struct i2c_client *client,
 		v4l2_ctrl_new_custom(&state->hdl,
 				     &tc358840_ctrl_splitter_width, NULL);
 
+	state->hdcp_present_ctrl =
+		v4l2_ctrl_new_std(&state->hdl, NULL,
+				  V4L2_CID_DV_HDCP_PRESENT, 0, 1, 1, 0);
+
+	if (state->pdata.enable_hdcp)
+		create_hdcp_controls(state);
+
 	state->eq_byps_mode_ctrl =
 		v4l2_ctrl_new_custom(&state->hdl,
 				     &tc358840_ctrl_eq_byps_mode, NULL);
@@ -3146,6 +3418,9 @@ static int tc358840_probe(struct i2c_client *client,
 	tc358840_set_csi_mbus_config(sd);
 
 	v4l2_ctrl_handler_setup(sd->ctrl_handler);
+
+	state->hdcp_repeater_ready = false;
+	state->hdcp_enabled = false;
 
 	/* Get interrupt */
 	if (client->irq) {

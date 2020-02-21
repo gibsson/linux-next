@@ -41,6 +41,10 @@ struct tc358840_platform_data {
 	/* DDC +5V debounce delay */
 	enum tc358840_ddc5v_delays ddc5v_delay;
 
+	/* HDCP */
+	bool enable_hdcp;
+	bool hdcp_repeater;
+
 	/* CSI Output */
 	enum tc358840_csi_port csi_port;
 
