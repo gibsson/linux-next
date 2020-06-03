@@ -19,6 +19,7 @@
 #include <linux/module.h>
 #include <linux/of_gpio.h>
 #include <linux/regmap.h>
+#include <linux/regulator/consumer.h>
 #include <linux/slab.h>
 #include <linux/v4l2-mediabus.h>
 #include <linux/videodev2.h>
@@ -26,6 +27,8 @@
 #include <media/v4l2-ctrls.h>
 #include <media/v4l2-device.h>
 #include <media/v4l2-subdev.h>
+
+#define IMX274_DEFAULT_CLK_FREQ			24000000
 
 /*
  * See "SHR, SVR Setting" in datasheet
@@ -130,6 +133,15 @@
 
 #define IMX274_TABLE_WAIT_MS			0
 #define IMX274_TABLE_END			1
+
+/* regulator supplies */
+static const char * const imx274_supply_names[] = {
+	"VANA",  /* Analog (2.8V) supply */
+	"VDIG",  /* Digital Core (1.8V) supply */
+	"VDDL",  /* IF (1.2V) supply */
+};
+
+#define IMX274_NUM_SUPPLIES ARRAY_SIZE(imx274_supply_names)
 
 /*
  * imx274 I2C operation related structure
@@ -501,6 +513,8 @@ struct imx274_ctrls {
  * @frame_rate: V4L2 frame rate structure
  * @regmap: Pointer to regmap structure
  * @reset_gpio: Pointer to reset gpio
+ * @supplies: imx274 analog and digital supplies
+ * @xclk: system clock to imx274
  * @lock: Mutex structure
  * @mode: Parameters for the selected readout mode
  */
@@ -514,6 +528,8 @@ struct stimx274 {
 	struct v4l2_fract frame_interval;
 	struct regmap *regmap;
 	struct gpio_desc *reset_gpio;
+	struct regulator_bulk_data supplies[IMX274_NUM_SUPPLIES];
+	struct clk *xclk;
 	struct mutex lock; /* mutex lock for operations */
 	const struct imx274_mode *mode;
 };
@@ -765,6 +781,64 @@ static void imx274_reset(struct stimx274 *priv, int rst)
 	usleep_range(IMX274_RESET_DELAY1, IMX274_RESET_DELAY2);
 	gpiod_set_value_cansleep(priv->reset_gpio, !!rst);
 	usleep_range(IMX274_RESET_DELAY1, IMX274_RESET_DELAY2);
+}
+
+/*
+ * imx274_power_on - Function called to power on the sensor
+ * @imx274: Pointer to device structure
+ */
+static int imx274_power_on(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct stimx274 *imx274 = to_imx274(sd);
+	int ret;
+
+	ret = clk_prepare_enable(imx274->xclk);
+	if (ret) {
+		dev_err(&imx274->client->dev, "Failed to enable clock\n");
+		return ret;
+	}
+
+	ret = regulator_bulk_enable(IMX274_NUM_SUPPLIES, imx274->supplies);
+	if (ret) {
+		dev_err(&imx274->client->dev, "Failed to enable regulators\n");
+		clk_disable_unprepare(imx274->xclk);
+		return ret;
+	}
+
+	usleep_range(1, 2);
+	imx274_reset(imx274, 1);
+
+	return 0;
+}
+
+/*
+ * imx274_power_off - Function called to power off the sensor
+ * @imx274: Pointer to device structure
+ */
+static int imx274_power_off(struct device *dev)
+{
+	struct i2c_client *client = to_i2c_client(dev);
+	struct v4l2_subdev *sd = i2c_get_clientdata(client);
+	struct stimx274 *imx274 = to_imx274(sd);
+
+	imx274_reset(imx274, 0);
+	clk_disable_unprepare(imx274->xclk);
+	regulator_bulk_disable(IMX274_NUM_SUPPLIES, imx274->supplies);
+
+	return 0;
+}
+
+static int imx274_get_regulators(struct device *dev, struct stimx274 *imx274)
+{
+	int i;
+
+	for (i = 0; i < IMX274_NUM_SUPPLIES; i++)
+		imx274->supplies[i].supply = imx274_supply_names[i];
+
+	return devm_regulator_bulk_get(dev, IMX274_NUM_SUPPLIES,
+				       imx274->supplies);
 }
 
 /**
@@ -1110,8 +1184,8 @@ static int imx274_apply_trimming(struct stimx274 *imx274)
 	v_pos = imx274->ctrls.vflip->cur.val ?
 		(-imx274->crop.top / 2) : (imx274->crop.top / 2);
 	v_cut = (IMX274_MAX_HEIGHT - imx274->crop.height) / 2;
-	write_v_size = imx274->crop.height + 22;
-	y_out_size   = imx274->crop.height + 14;
+	write_v_size = imx274->crop.height + 8;
+	y_out_size   = imx274->crop.height;
 
 	err = imx274_write_mbreg(imx274, IMX274_HMAX_REG_LSB, hmax, 2);
 	if (!err)
@@ -1784,6 +1858,24 @@ static int imx274_probe(struct i2c_client *client)
 
 	mutex_init(&imx274->lock);
 
+	imx274->xclk = devm_clk_get(&client->dev, "xclk");
+	if (IS_ERR(imx274->xclk)) {
+		dev_err(&client->dev, "Failed to get xclk\n");
+		return ret;
+	}
+
+	ret = clk_set_rate(imx274->xclk, IMX274_DEFAULT_CLK_FREQ);
+	if (ret < 0) {
+		dev_err(&client->dev, "Failed to set xclk rate\n");
+		return ret;
+	}
+
+	ret = imx274_get_regulators(&client->dev, imx274);
+	if (ret) {
+		dev_err(&client->dev, "Failed to get power regulators, err: %d\n", ret);
+		return ret;
+	}
+
 	/* initialize format */
 	imx274->mode = &imx274_modes[IMX274_DEFAULT_BINNING];
 	imx274->crop.width = IMX274_MAX_WIDTH;
@@ -1831,9 +1923,6 @@ static int imx274_probe(struct i2c_client *client)
 		goto err_me;
 	}
 
-	/* pull sensor out of reset */
-	imx274_reset(imx274, 1);
-
 	/* initialize controls */
 	ret = v4l2_ctrl_handler_init(&imx274->ctrls.handler, 4);
 	if (ret < 0) {
@@ -1875,12 +1964,20 @@ static int imx274_probe(struct i2c_client *client)
 		goto err_ctrls;
 	}
 
+	/* power on the sensor */
+	ret = imx274_power_on(&client->dev);
+	if (ret < 0) {
+		dev_err(&client->dev,
+			"%s : imx274 power on failed\n", __func__);
+		goto err_ctrls;
+	}
+
 	/* setup default controls */
 	ret = v4l2_ctrl_handler_setup(&imx274->ctrls.handler);
 	if (ret) {
 		dev_err(&client->dev,
 			"Error %d setup default controls\n", ret);
-		goto err_ctrls;
+		goto err_power_off;
 	}
 
 	/* load default control values */
@@ -1889,7 +1986,7 @@ static int imx274_probe(struct i2c_client *client)
 		dev_err(&client->dev,
 			"%s : imx274_load_default failed %d\n",
 			__func__, ret);
-		goto err_ctrls;
+		goto err_power_off;
 	}
 
 	/* register subdevice */
@@ -1898,12 +1995,14 @@ static int imx274_probe(struct i2c_client *client)
 		dev_err(&client->dev,
 			"%s : v4l2_async_register_subdev failed %d\n",
 			__func__, ret);
-		goto err_ctrls;
+		goto err_power_off;
 	}
 
 	dev_info(&client->dev, "imx274 : imx274 probe success !\n");
 	return 0;
 
+err_power_off:
+	imx274_power_off(&client->dev);
 err_ctrls:
 	v4l2_ctrl_handler_free(&imx274->ctrls.handler);
 err_me:
@@ -1923,6 +2022,7 @@ static int imx274_remove(struct i2c_client *client)
 
 	v4l2_async_unregister_subdev(sd);
 	v4l2_ctrl_handler_free(&imx274->ctrls.handler);
+	imx274_power_off(&client->dev);
 	media_entity_cleanup(&sd->entity);
 	mutex_destroy(&imx274->lock);
 	return 0;
