@@ -19,8 +19,190 @@
 
 			avdd-dsi-csi-supply = <&vdd_dsi_csi>;
 
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				imx219_vi_port0: port@0 {
+					reg = <0>;
+
+					imx219_vi_in0: endpoint {
+						remote-endpoint = <&imx219_csi_out0>;
+					};
+				};
+
+				imx274_vi_port4: port@4 {
+					reg = <4>;
+
+					imx274_vi_in4: endpoint {
+						remote-endpoint = <&imx274_csi_out0>;
+					};
+				};
+			};
+
 			csi@838 {
 				status = "okay";
+
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				csi_chan0: channel@0 {
+					reg = <0>;
+					nvidia,mipi-calibrate = <&mipi 0x001>; /* CSIA pad */
+
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						csi_chan0_port0: port@0 {
+							reg = <0>;
+
+							imx219_csi_in0: endpoint {
+								data-lanes = <1 2>;
+								remote-endpoint = <&imx219_out0>;
+							};
+						};
+						csi_chan0_port1: port@1 {
+							reg = <1>;
+
+							imx219_csi_out0: endpoint {
+								remote-endpoint = <&imx219_vi_in0>;
+							};
+						};
+					};
+				};
+
+				csi_chan4: channel@4 {
+					reg = <4>;
+					nvidia,mipi-calibrate = <&mipi 0x030>; /* CSIE & CSIF pads */
+
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						csi_chan4_port0: port@0 {
+							reg = <0>;
+
+							imx274_csi_in0: endpoint {
+								data-lanes = <1 2 3 4>;
+								remote-endpoint = <&imx274_out0>;
+							};
+						};
+
+						csi_chan4_port1: port@1 {
+							reg = <1>;
+
+							imx274_csi_out0: endpoint {
+								remote-endpoint = <&imx274_vi_in4>;
+							};
+						};
+					};
+				};
+			};
+		};
+
+		i2c@546c0000 {
+			status = "okay";
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			tca9546@70 {
+				compatible = "nxp,pca9546";
+				reg = <0x70>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+				skip_mux_detect = "yes";
+
+				/*
+					reset-gpios for camera connectors
+					reset-gpios = <&gpio TEGRA_GPIO(S, 4) GPIO_ACTIVE_HIGH>;
+					reset-gpios = <&gpio TEGRA_GPIO(S, 7) GPIO_ACTIVE_HIGH>;
+					reset-gpios = <&gpio TEGRA_GPIO(T, 0) GPIO_ACTIVE_HIGH>;
+				 */
+
+				i2c@2 {
+					reg = <2>;
+					i2c-mux,deselect-on-exit;
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					imx274_a@1a {
+						status = "okay";
+						compatible = "sony,imx274";
+						reg = <0x1a>;
+						reset-gpios = <&gpio TEGRA_GPIO(T, 0) GPIO_ACTIVE_HIGH>;
+
+						clocks = <&tegra_pmc TEGRA_PMC_CLK_OUT_3>;
+						clock-names = "xclk";
+
+						assigned-clocks = <&tegra_car TEGRA210_CLK_EXTERN3>,
+								  <&tegra_pmc TEGRA_PMC_CLK_OUT_3>;
+						assigned-clock-parents = <&tegra_car TEGRA210_CLK_PLL_P>,
+									 <&tegra_car TEGRA210_CLK_EXTERN3>;
+						assigned-clock-rates = <24000000>;
+
+						VANA-supply = <&vdd_cam_2v8>;
+						VDDL-supply = <&vdd_cam_1v2>;
+						VDIG-supply = <&vdd_cam_1v8>;
+
+						ports {
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							port@0 {
+								reg = <0>;
+
+								imx274_out0: endpoint {
+									remote-endpoint = <&imx274_csi_in0>;
+								};
+							};
+						};
+					};
+				};
+
+				i2c@0 {
+					reg = <0>;
+					i2c-mux,deselect-on-exit;
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					imx219@10 {
+						status = "okay";
+						compatible = "sony,imx219";
+						reg = <0x10>;
+						reset-gpios = <&gpio TEGRA_GPIO(S, 4) GPIO_ACTIVE_HIGH>;
+
+						clocks = <&tegra_pmc TEGRA_PMC_CLK_OUT_3>;
+						clock-names = "xclk";
+
+						assigned-clocks = <&tegra_car TEGRA210_CLK_EXTERN3>,
+							<&tegra_pmc TEGRA_PMC_CLK_OUT_3>;
+						assigned-clock-parents = <&tegra_car TEGRA210_CLK_PLL_P>,
+							<&tegra_car TEGRA210_CLK_EXTERN3>;
+						assigned-clock-rates = <24000000>;
+
+						VANA-supply = <&vdd_cam_2v8>;
+						VDDL-supply = <&vdd_cam_1v2>;
+						VDIG-supply = <&vdd_cam_1v8>;
+
+						ports {
+							#address-cells = <1>;
+							#size-cells = <0>;
+
+							port@0 {
+								reg = <0>;
+
+								imx219_out0: endpoint {
+									link-frequencies = /bits/ 64 <456000000>;
+									clock-lanes = <0>;
+									data-lanes = <1 2>;
+									remote-endpoint = <&imx219_csi_in0>;
+								};
+							};
+						};
+					};
+				};
 			};
 		};
 
