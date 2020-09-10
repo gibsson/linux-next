@@ -333,10 +333,13 @@ static u32 i2c_readl(struct tegra_i2c_dev *i2c_dev, unsigned int reg)
 	return readl_relaxed(i2c_dev->base + tegra_i2c_reg_addr(i2c_dev, reg));
 }
 
-static void i2c_writesl(struct tegra_i2c_dev *i2c_dev, void *data,
-			unsigned int reg, unsigned int len)
+static void i2c_writesl(struct tegra_i2c_dev *i2c_dev, u32 *data,
+			unsigned long reg, int len)
 {
-	writesl(i2c_dev->base + tegra_i2c_reg_addr(i2c_dev, reg), data, len);
+	while (len--) {
+		writel(*data++, i2c_dev->base + tegra_i2c_reg_addr(i2c_dev, reg));
+		i2c_readl(i2c_dev, I2C_INT_STATUS);
+	}
 }
 
 static void i2c_readsl(struct tegra_i2c_dev *i2c_dev, void *data,
@@ -811,7 +814,7 @@ static int tegra_i2c_fill_tx_fifo(struct tegra_i2c_dev *i2c_dev)
 		i2c_dev->msg_buf_remaining = buf_remaining;
 		i2c_dev->msg_buf = buf + words_to_transfer * BYTES_PER_FIFO_WORD;
 
-		i2c_writesl(i2c_dev, buf, I2C_TX_FIFO, words_to_transfer);
+		i2c_writesl(i2c_dev, (u32 *)buf, I2C_TX_FIFO, words_to_transfer);
 
 		buf += words_to_transfer * BYTES_PER_FIFO_WORD;
 	}
