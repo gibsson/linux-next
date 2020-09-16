@@ -19,8 +19,80 @@
 
 			avdd-dsi-csi-supply = <&vdd_dsi_csi>;
 
+			ports {
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				port@0 {
+					reg = <0>;
+					tc358840_vi_in0: endpoint {
+						remote-endpoint = <&tc358840_csi_out0>;
+					};
+				};
+
+				port@4 {
+					reg = <4>;
+					tc358840_vi_in4: endpoint {
+						remote-endpoint = <&tc358840_csi_out1>;
+					};
+				};
+			};
+
 			csi@838 {
 				status = "okay";
+
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				csi_chan0: channel@0 {
+					reg = <0>;
+					nvidia,mipi-calibrate = <&mipi 0x00f>; /* CSIA & CSIB pads */
+
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							tc358840_csi_in0: endpoint {
+								data-lanes = <1 2 3 4 5 6 7 8>;
+								remote-endpoint = <&tc358840_out0>;
+							};
+						};
+
+						port@1 {
+							reg = <1>;
+							tc358840_csi_out0: endpoint {
+								remote-endpoint = <&tc358840_vi_in0>;
+							};
+						};
+					};
+				};
+
+				csi_chan4: channel@4 {
+					reg = <4>;
+					nvidia,mipi-calibrate = <&mipi 0x030>; /* CSIE & CSIF pads */
+
+					ports {
+						#address-cells = <1>;
+						#size-cells = <0>;
+
+						port@0 {
+							reg = <0>;
+							tc358840_csi_in4: endpoint {
+								data-lanes = <1 2 3 4>;
+								remote-endpoint = <&tc358840_out1>;
+							};
+						};
+
+						port@1 {
+							reg = <1>;
+							tc358840_csi_out1: endpoint {
+								remote-endpoint = <&tc358840_vi_in4>;
+							};
+						};
+					};
+				};
 			};
 		};
 
@@ -34,6 +106,131 @@
 			nvidia,ddc-i2c-bus = <&hdmi_ddc>;
 			nvidia,hpd-gpio = <&gpio TEGRA_GPIO(CC, 1)
 					   GPIO_ACTIVE_LOW>;
+		};
+
+		i2c@546c0000 {
+			status = "okay";
+
+			#address-cells = <1>;
+			#size-cells = <0>;
+
+			tc358840@f {
+				status = "okay";
+				compatible = "toshiba,tc358840";
+				reg = <0x0f>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				reset-gpios = <&gpio TEGRA_GPIO(S, 4) GPIO_ACTIVE_LOW>; /* CAM0_RST -> CAM_RST */
+				interrupt-parent = <&gpio>;
+				interrupts = <TEGRA_GPIO(S, 7) GPIO_ACTIVE_HIGH>; /* CAM1_PWDN */
+
+				vdig-supply = <&vdd_cam_1v2>;
+				vif-supply = <&vdd_cam>;
+
+				refclk_hz = <48000000>; /* 40 - 50 MHz */
+				ddc5v_delay = <1>;        /* 50 ms */
+				csi_port = <3>;            /* Enable TX0 & TX1 */
+
+/*
+				lineinitcnt = <0x00000FA0>;
+				lptxtimecnt = <0x00000004>;
+				tclk_headercnt = <0x00180203>;
+				tclk_trailcnt = <0x00040005>;
+				ths_headercnt = <0x000D0004>;
+				twakeup = <0x00003E80>;
+				tclk_postcnt = <0x0000000A>;
+				ths_trailcnt = <0x00080006>;
+				hstxvregcnt = <0x00000020>;
+				btacnt = <0>;*/
+
+				lineinitcnt = <0x00001770>;
+				lptxtimecnt = <0x00000007>;
+				tclk_headercnt = <0x00320207>;
+				tclk_trailcnt = <0x00040005>;
+				ths_headercnt = <0x000d0008>;
+				twakeup = <0x00004e20>;
+				tclk_postcnt = <0x0000000a>;
+				ths_trailcnt = <0x000d0009>;
+				hstxvregcnt = <0x00000020>;
+				btacnt = <0x00050004>;
+
+				/* PLL */
+				/* Bps per lane is (refclk_hz / pll_prd) * pll_fbd */
+				pll_prd = <9>;
+				pll_fbd = <199>;
+				pll_frs = <0>;
+
+				enable_hdcp = <0>;
+
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					port@0 {
+						reg = <0>;
+						tc358840_out0: endpoint {
+							link-frequencies = /bits/ 64 <297000000>;
+							clock-lanes = <0>;
+							data-lanes = <1 2 3 4 5 6 7 8>;
+							remote-endpoint = <&tc358840_csi_in0>;
+						};
+					};
+				};
+			};
+
+			tc358840@1f {
+				status = "disabled";
+				compatible = "toshiba,tc358840";
+				reg = <0x1f>;
+				#address-cells = <1>;
+				#size-cells = <0>;
+
+				reset-gpios = <&gpio TEGRA_GPIO(S, 5) GPIO_ACTIVE_LOW>; /* CAM1_RST -> CAM_AF_EN */
+				interrupt-parent = <&gpio>;
+				interrupts = <TEGRA_GPIO(T, 0) GPIO_ACTIVE_HIGH>; /* CAM2_PWDN */
+
+				vdig-supply = <&vdd_cam_1v2>;
+				vif-supply = <&vdd_cam>;
+
+				refclk_hz = <48000000>; /* 40 - 50 MHz */
+				ddc5v_delay = <1>;        /* 50 ms */
+				csi_port = <1>;            /* Enable TX0 & TX1 */
+
+				lineinitcnt = <0x00001770>;
+				lptxtimecnt = <0x00000007>;
+				tclk_headercnt = <0x00320207>;
+				tclk_trailcnt = <0x00040005>;
+				ths_headercnt = <0x000d0008>;
+				twakeup = <0x00004e20>;
+				tclk_postcnt = <0x0000000a>;
+				ths_trailcnt = <0x000d0009>;
+				hstxvregcnt = <0x00000020>;
+				btacnt = <0x00050004>;
+
+				/* PLL */
+				/* Bps per lane is (refclk_hz / pll_prd) * pll_fbd */
+				pll_prd = <9>;
+				pll_fbd = <199>;
+				pll_frs = <0>;
+
+				enable_hdcp = <0>;
+
+				ports {
+					#address-cells = <1>;
+					#size-cells = <0>;
+
+					port@0 {
+						reg = <0>;
+						tc358840_out1: endpoint {
+							link-frequencies = /bits/ 64 <297000000>;
+							clock-lanes = <0>;
+							data-lanes = <1 2 3 4>;
+							remote-endpoint = <&tc358840_csi_in4>;
+						};
+					};
+				};
+			};
 		};
 	};
 
@@ -785,16 +982,16 @@
 			};
 			cam1_pwdn_ps7 {
 				nvidia,pins = "cam1_pwdn_ps7";
-				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+				nvidia,pull = <TEGRA_PIN_PULL_DOWN>;
 				nvidia,tristate = <TEGRA_PIN_DISABLE>;
-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
 				nvidia,open-drain = <TEGRA_PIN_DISABLE>;
 			};
 			cam2_pwdn_pt0 {
 				nvidia,pins = "cam2_pwdn_pt0";
-				nvidia,pull = <TEGRA_PIN_PULL_NONE>;
+				nvidia,pull = <TEGRA_PIN_PULL_UP>;
 				nvidia,tristate = <TEGRA_PIN_DISABLE>;
-				nvidia,enable-input = <TEGRA_PIN_DISABLE>;
+				nvidia,enable-input = <TEGRA_PIN_ENABLE>;
 				nvidia,open-drain = <TEGRA_PIN_DISABLE>;
 			};
 			cam1_strobe_pt1 {
@@ -1691,6 +1888,8 @@
 		gpio = <&exp2 10 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 		vin-supply = <&vdd_3v3_sys>;
+		regulator-always-on;
+		regulator-boot-on;
 	};
 
 	vdd_cam_2v8: regulator@12 {
@@ -1711,5 +1910,17 @@
 		gpio = <&exp2 9 GPIO_ACTIVE_HIGH>;
 		enable-active-high;
 		vin-supply = <&vdd_3v3_sys>;
+		regulator-always-on;
+		regulator-boot-on;
+	};
+
+	vdd_cam: regulator@14 {
+		compatible = "regulator-fixed";
+		regulator-name = "vdd-cam";
+		gpio = <&exp2 3 GPIO_ACTIVE_HIGH>;
+		vin-supply = <&vdd_cam_1v8>;
+		enable-active-high;
+		regulator-always-on;
+		regulator-boot-on;
 	};
 };
