@@ -75,6 +75,14 @@ static const struct v4l2_dv_timings_cap tc358840_timings_cap_4kp30 = {
 			     V4L2_DV_BT_CAP_CUSTOM)
 };
 
+/* regulator supplies */
+static const char * const tc358840_supply_names[] = {
+	"vif",  /* Digital Core (1.8V) supply */
+	"vdig",  /* IF (1.2V) supply */
+};
+
+#define TC358840_NUM_SUPPLIES ARRAY_SIZE(tc358840_supply_names)
+
 enum tc358840_status {
 	STATUS_FIND_SIGNAL,
 	STATUS_FOUND_SIGNAL,
@@ -87,6 +95,7 @@ struct tc358840_state {
 	struct media_pad pad[2];
 	struct v4l2_ctrl_handler hdl;
 	struct i2c_client *i2c_client;
+	struct regulator_bulk_data supplies[TC358840_NUM_SUPPLIES];
 	/* serialize between the poll function and ops */
 	struct mutex lock;
 	bool suspended;
@@ -362,7 +371,7 @@ static inline unsigned int fps(const struct v4l2_bt_timings *t)
 	if (!V4L2_DV_BT_FRAME_HEIGHT(t) || !V4L2_DV_BT_FRAME_WIDTH(t))
 		return 0;
 
-	return DIV_ROUND_CLOSEST((unsigned int)t->pixelclock,
+	return DIV_ROUND_CLOSEST_ULL(t->pixelclock,
 			V4L2_DV_BT_FRAME_HEIGHT(t) * V4L2_DV_BT_FRAME_WIDTH(t));
 }
 
@@ -656,7 +665,7 @@ retry:
 			enable_stream(sd, false);
 			if (retries++ < 5)
 				goto retry;
-			v4l2_err(sd, "Could not detect busy data lanes after %d attempts (stats: %u %u %u %u %u\n", retries,
+			v4l2_err(sd, "Could not detect busy data lanes after %d attempts (stats: %u %u %u %u %u)\n", retries,
 				 state->retry_attempts_stats[1],
 				 state->retry_attempts_stats[2],
 				 state->retry_attempts_stats[3],
@@ -1307,7 +1316,7 @@ static int tc358840_get_detected_timings(struct v4l2_subdev *sd,
 	bt->height = height;
 	bt->vsync = frame_height - height;
 	bt->hsync = frame_width - width;
-	bt->pixelclock = DIV_ROUND_CLOSEST((frame_width * frame_height * fps)
+	bt->pixelclock = DIV_ROUND_CLOSEST_ULL(((u64)frame_width * frame_height * fps)
 					   / 100, 1000) * 1000;
 
 	if (pol & MASK_S_V_HPOL)
@@ -2919,6 +2928,17 @@ static bool tc358840_parse_dt(struct tc358840_platform_data *pdata,
 }
 #endif
 
+static int tc358840_get_regulators(struct device *dev, struct tc358840_state *state)
+{
+	int i;
+
+	for (i = 0; i < TC358840_NUM_SUPPLIES; i++)
+		state->supplies[i].supply = tc358840_supply_names[i];
+
+	return devm_regulator_bulk_get(dev, TC358840_NUM_SUPPLIES,
+				       state->supplies);
+}
+
 static int tc358840_verify_chipid(struct v4l2_subdev *sd)
 {
 	u16 cid = 0;
@@ -3024,6 +3044,13 @@ static int tc358840_probe(struct i2c_client *client,
 			v4l_err(client, "Couldn't parse device tree\n");
 			return -ENODEV;
 		}
+		err = tc358840_get_regulators(&client->dev, state);
+		if (err)
+			return err;
+		err = regulator_bulk_enable(TC358840_NUM_SUPPLIES, state->supplies);
+		if (err)
+			return err;
+
 	} else {
 		if (!client->dev.platform_data) {
 			v4l_err(client, "No platform data!\n");
@@ -3046,22 +3073,24 @@ static int tc358840_probe(struct i2c_client *client,
 		 state->pdata.reset_gpio);
 	if (!gpio_is_valid(state->pdata.reset_gpio)) {
 		v4l_err(client, "Reset GPIO is invalid!\n");
-		return state->pdata.reset_gpio;
+		err = state->pdata.reset_gpio;
+		goto err_reg_disable;
 	}
 	err = devm_gpio_request_one(&client->dev, state->pdata.reset_gpio,
-				    GPIOF_OUT_INIT_LOW, "tc358840-reset");
+				    GPIOF_OUT_INIT_HIGH, "tc358840-reset");
 	if (err) {
 		dev_err(&client->dev,
 			"Failed to request Reset GPIO 0x%04X: %d\n",
 			state->pdata.reset_gpio, err);
-		return err;
+		goto err_reg_disable;
 	}
-	tc358840_reset_gpio(state, false);
+
+	//tc358840_reset_gpio(state, false);
 
 	if (!i2c_check_functionality(client->adapter,
 				     I2C_FUNC_SMBUS_BYTE_DATA)) {
 		err = -EIO;
-		goto err_reset;
+		goto err_reg_disable;
 	}
 	v4l_info(client, "Chip found @ 7h%02X (%s)\n",
 		 client->addr, client->adapter->name);
@@ -3069,7 +3098,7 @@ static int tc358840_probe(struct i2c_client *client,
 	/* Verify chip ID */
 	err = tc358840_verify_chipid(sd);
 	if (err)
-		goto err_reset;
+		goto err_reg_disable;
 
 #ifdef CONFIG_VIDEO_TC358840_CEC
 	state->cec_adap =
@@ -3079,7 +3108,7 @@ static int tc358840_probe(struct i2c_client *client,
 				     CEC_MAX_LOG_ADDRS);
 	if (IS_ERR(state->cec_adap)) {
 		err = state->cec_adap ? PTR_ERR(state->cec_adap) : -ENOMEM;
-		goto err_reset;
+		goto err_reg_disable;
 	}
 	irq_mask |= MASK_CEC_RINT | MASK_CEC_TINT;
 #endif
@@ -3215,7 +3244,8 @@ static int tc358840_probe(struct i2c_client *client,
 	cec_unregister_adapter(state->cec_adap);
 err_hdl:
 	v4l2_ctrl_handler_free(&state->hdl);
-err_reset:
+err_reg_disable:
+	regulator_bulk_disable(TC358840_NUM_SUPPLIES, state->supplies);
 	tc358840_reset_gpio(state, true);
 	return err;
 }
@@ -3254,6 +3284,7 @@ static int tc358840_remove(struct i2c_client *client)
 #endif
 	cec_unregister_adapter(state->cec_adap);
 	tc358840_reset_gpio(state, true);
+	regulator_bulk_disable(TC358840_NUM_SUPPLIES, state->supplies);
 	v4l_info(client, "removed tc358840 instance\n");
 	return 0;
 }
