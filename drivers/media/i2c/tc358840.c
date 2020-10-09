@@ -2885,9 +2885,9 @@ static bool tc358840_parse_dt(struct tc358840_platform_data *pdata,
 	    of_property_read_u32(node, "ths_trailcnt", &pdata->ths_trailcnt) ||
 	    of_property_read_u32(node, "hstxvregcnt", &pdata->hstxvregcnt) ||
 	    of_property_read_u32(node, "btacnt", &pdata->btacnt) ||
-	    of_property_read_u16(node, "pll_prd", &pdata->pll_prd) ||
-	    of_property_read_u16(node, "pll_frs", &pdata->pll_frs) ||
-	    of_property_read_u16(node, "pll_fbd", &pdata->pll_fbd))
+	    of_property_read_u32(node, "pll_prd", &pdata->pll_prd) ||
+	    of_property_read_u32(node, "pll_frs", &pdata->pll_frs) ||
+	    of_property_read_u32(node, "pll_fbd", &pdata->pll_fbd))
 		goto free_endpoint;
 
 	if (pdata->ddc5v_delay > DDC5V_DELAY_MAX)

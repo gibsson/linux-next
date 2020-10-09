@@ -59,9 +59,9 @@ struct tc358840_platform_data {
 
 	/* PLL */
 	/* Bps per lane is (refclk_hz / (prd + 1) * (fbd + 1)) / 2^frs */
-	u16 pll_prd;
-	u16 pll_fbd;
-	u16 pll_frs;
+	u32 pll_prd;
+	u32 pll_fbd;
+	u32 pll_frs;
 };
 
 /* custom controls */
