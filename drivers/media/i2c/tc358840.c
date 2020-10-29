@@ -1274,6 +1274,7 @@ static int tc358840_get_detected_timings(struct v4l2_subdev *sd,
 	unsigned int width, height, frame_width, frame_height;
 	unsigned int pol;
 	u32 frame_interval, fps;
+	u64 pixels_per_sec;
 
 	memset(timings, 0, sizeof(struct v4l2_dv_timings));
 
@@ -1316,8 +1317,8 @@ static int tc358840_get_detected_timings(struct v4l2_subdev *sd,
 	bt->height = height;
 	bt->vsync = frame_height - height;
 	bt->hsync = frame_width - width;
-	bt->pixelclock = DIV_ROUND_CLOSEST_ULL(((u64)frame_width * frame_height * fps)
-					   / 100, 1000) * 1000;
+	pixels_per_sec = div_u64((u64)frame_width * frame_height * fps, 100);
+	bt->pixelclock = DIV_ROUND_CLOSEST_ULL(pixels_per_sec, 1000) * 1000;
 
 	if (pol & MASK_S_V_HPOL)
 		bt->polarities |= V4L2_DV_HSYNC_POS_POL;
