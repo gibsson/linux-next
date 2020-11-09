@@ -534,7 +534,7 @@ static int cal_camerarx_parse_dt(struct cal_camerarx *phy)
 {
 	struct v4l2_fwnode_endpoint *endpoint = &phy->endpoint;
 	struct device_node *ep_node;
-	char data_lanes[V4L2_FWNODE_CSI2_MAX_DATA_LANES * 2];
+	char data_lanes[V4L2_FWNODE_CSI2_MAX_DATA_LANES];
 	unsigned int i;
 	int ret;
 
