@@ -561,7 +561,7 @@ static int enable_stream(struct v4l2_subdev *sd, bool enable)
 {
 	struct tc358840_state *state = to_state(sd);
 	struct tc358840_platform_data *pdata = &state->pdata;
-
+	u16 csi_port = pdata->csi_port;
 	u32 sync_timeout_ctr;
 	int retries = 0;
 
@@ -571,6 +571,9 @@ static int enable_stream(struct v4l2_subdev *sd, bool enable)
 		goto out;
 
 	state->test_dl = false;
+	if (state->timings.bt.width <= 1920)
+		csi_port &= ~MASK_VTX1EN;
+
 retry:
 	/* always start stream enable process with testimage turned off */
 	i2c_wr16_and_or(sd, CB_CTL, ~(u16)MASK_CB_EN, 0);
@@ -637,7 +640,7 @@ retry:
 
 	i2c_wr16_and_or(sd, CONFCTL0,
 			~(u16)(MASK_VTX0EN | MASK_VTX1EN | MASK_ABUFEN),
-			enable ? ((pdata->csi_port & (MASK_VTX0EN | MASK_VTX1EN)) |
+			enable ? ((csi_port & (MASK_VTX0EN | MASK_VTX1EN)) |
 				  MASK_ABUFEN | MASK_TX_MSEL | MASK_AUTOINDEX) :
 			(MASK_TX_MSEL | MASK_AUTOINDEX));
 
