@@ -255,6 +255,8 @@ static void tegra_channel_capture_error_recover(struct tegra_vi_channel *chan,
 		"TEGRA_VI_CFG_VI_INCR_SYNCPT_ERROR 0x%08x\n", val);
 	tegra_vi_write(chan, TEGRA_VI_CFG_VI_INCR_SYNCPT_ERROR, val);
 
+	/* disable VI channel data to memory write */
+	vi_csi_write(chan, portno, TEGRA_VI_CSI_IMAGE_DEF, 0);
 	/* recover VI by issuing software reset and re-setup for capture */
 	tegra_channel_vi_soft_reset(chan, portno);
 	tegra_channel_capture_setup(chan, portno);
