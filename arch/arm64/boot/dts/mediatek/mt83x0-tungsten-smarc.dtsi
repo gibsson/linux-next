@@ -2,6 +2,7 @@
 /*
  * Copyright (C) 2025 Ezurio LLC
  */
+
 #include "mt6359.dtsi"
 #include <dt-bindings/gpio/gpio.h>
 #include <dt-bindings/input/input.h>
@@ -12,13 +13,30 @@
 
 / {
 	aliases {
+		dsi0 = &disp_dsi0;
 		ethernet0 = &eth;
-		serial0 = &uart0;
+		i2c0 = &i2c0;
+		i2c1 = &i2c1;
+		i2c2 = &i2c2;
+		i2c3 = &i2c3;
+		i2c4 = &i2c4;
+		i2c5 = &i2c5;
+		i2c6 = &i2c6;
 		mmc0 = &mmc0;
 		mmc1 = &mmc1;
 		mmc2 = &mmc2;
 		rtc0 = &rv3028;
 		rtc1 = &mt6359rtc;
+		serial0 = &uart0;
+	};
+
+	backlight_lcd0: backlight-lcd0 {
+		compatible = "pwm-backlight";
+		brightness-levels = <0 1023>;
+		default-brightness-level = <768>;
+		num-interpolated-steps = <1023>;
+		enable-gpios = <&pio 30 GPIO_ACTIVE_HIGH>;
+		pwms = <&disp_pwm0 0 30000>;
 	};
 
 	chosen {
@@ -37,7 +55,7 @@
 		reg = <0 0x40000000 0x1 0x00000000>;
 	};
 
-	reserved_memory: reserved-memory {
+	reserved-memory {
 		#address-cells = <2>;
 		#size-cells = <2>;
 		ranges;
@@ -79,9 +97,21 @@
 			reg = <0 0x57000000 0 0x1400000>; /* 20 MB */
 		};
 
+		adsp_mem: memory@60000000 {
+			compatible = "shared-dma-pool";
+			reg = <0 0x60000000 0 0xf00000>;
+			no-map;
+		};
+
 		afe_dma_mem: memory@60f00000 {
 			compatible = "shared-dma-pool";
 			reg = <0 0x60f00000 0 0x100000>;
+			no-map;
+		};
+
+		adsp_dma_mem: memory@61000000 {
+			compatible = "shared-dma-pool";
+			reg = <0 0x61000000 0 0x100000>;
 			no-map;
 		};
 	};
@@ -242,6 +272,89 @@
 	cpu-supply = <&mt6315_6_vbuck1>;
 };
 
+&disp_pwm0 {
+	pinctrl-names = "default";
+	pinctrl-0 = <&disp_pwm0_pin>;
+	status = "okay";
+};
+
+&disp_dsi0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+	poweron-in-hs-mode = <0>;
+	status = "okay";
+
+	panel: panel@0 {
+		backlight = <&backlight_lcd0>;
+		bits-per-color = <8>;
+		bridge-de-active = <0>;
+		bus-format = "rgb888";
+		clocks = <&vdosys0 CLK_VDO0_DSI0_DSI>;
+		clock-names = "mipi_clk";
+		compatible = "panel,common";
+		dsi-format = "rgb888";
+		dsi-lanes = <4>;
+		mode-skip-eot;
+		mode-video;
+		mode-video-burst;
+		panel-height-mm = <136>;
+		panel-width-mm = <217>;
+		pinctrl-names = "sn65dsi83";
+		pinctrl-0 = <&dsi0_sn65dsi83_pins>;
+		power-supply = <&VDD_5V>;
+		reg = <0>;
+		sn65dsi83 = <&dsi0_to_lvds>;
+		spwg;
+
+		display-timings {
+			mipi_t: t-dsi-default {
+				clock-frequency = <71700000>;
+				hactive = <1280>;
+				vactive = <800>;
+				hback-porch = <5>;
+				hfront-porch = <151>;
+				vback-porch = <2>;
+				vfront-porch = <28>;
+				hsync-len = <4>;
+				vsync-len = <1>;
+				hsync-active = <0>;
+				vsync-active = <0>;
+				de-active = <1>;
+			};
+		};
+
+		dsi0_to_lvds: dsi0-to-lvds {
+			alias = <&dsi0_to_lvds>;
+			enable-gpios = <&pio 25 GPIO_ACTIVE_HIGH>;
+			i2c-address = <0x2c>;
+			i2c-bus = <&i2c_mux_lcd_dsi0>;
+			interrupts-extended = <&pio 128 IRQ_TYPE_LEVEL_HIGH>;
+		};
+
+		port {
+			panel0_in: endpoint {
+				remote-endpoint = <&disp_dsi0_out>;
+			};
+		};
+	};
+
+	ports {
+		#address-cells = <1>;
+		#size-cells = <0>;
+
+		port@1 {
+			reg = <1>;
+			disp_dsi0_out: endpoint {
+				remote-endpoint = <&panel0_in>;
+			};
+		};
+	};
+};
+
+&mipi_tx_config0 {
+	status = "okay";
+};
+
 &gpu {
 	mali-supply = <&mt6359_vproc2_buck_reg>;
 	status = "okay";
@@ -380,6 +493,21 @@
 	status = "okay";
 };
 
+&i2c_mux_lcd_dsi0 {
+	#address-cells = <1>;
+	#size-cells = <0>;
+
+	ts_dsi0_goodix: touchscren@14 {
+		compatible = "goodix,gt911";
+		reg = <0x14>;
+		pinctrl-names = "default";
+		pinctrl-0 = <&ts_dsi0_goodix_pins>;
+		interrupts-extended = <&pio 146 IRQ_TYPE_LEVEL_HIGH>;
+		irq-gpios = <&pio 146 GPIO_ACTIVE_HIGH>;
+		reset-gpios = <&pio 7 GPIO_ACTIVE_HIGH>;
+	};
+};
+
 &i2c_mux_smarc_gp_rtc {
 	rv3028: rtc@52 {
 		pinctrl-names = "default";
@@ -466,6 +594,7 @@
 };
 
 &scp {
+	firmware-name = "mediatek/mt8188/scp.img";
 	memory-region = <&scp_mem>;
 	status = "okay";
 };
@@ -909,6 +1038,26 @@
 		};
 	};
 
+	disp_pwm0_pin: disp-pwm0-pin {
+		pins1 {
+			pinmux = <PINMUX_GPIO29__FUNC_O_DISP_PWM0>;
+			bias-pull-down;
+		};
+	};
+
+	dsi0_sn65dsi83_pins: dsi0-sn65dsi83-pins {
+		pins-irq {
+			pinmux = <PINMUX_GPIO128__FUNC_B_GPIO128>;
+			bias-pull-down;
+			input-enable;
+		};
+
+		pins-enable {
+			pinmux = <PINMUX_GPIO25__FUNC_B_GPIO25>;
+			bias-pull-down;
+		};
+	};
+
 	eth_default_pins: eth-default-pins {
 		pins-txd {
 			pinmux = <PINMUX_GPIO131__FUNC_O_GBE_TXD3>,
@@ -1258,6 +1407,19 @@
 				 <PINMUX_GPIO48__FUNC_O_PERSTN>,
 				 <PINMUX_GPIO49__FUNC_B1_CLKREQN>;
 			bias-pull-up;
+		};
+	};
+
+	ts_dsi0_goodix_pins: ts-dsi0-goodix-pins {
+		pins-irq {
+			pinmux = <PINMUX_GPIO146__FUNC_B_GPIO146>;
+			bias-pull-up = <MTK_PUPD_SET_R1R0_01>;
+			input-enable;
+		};
+
+		pins-reset {
+			pinmux = <PINMUX_GPIO7__FUNC_B_GPIO7>;
+			bias-pull-down;
 		};
 	};
 
