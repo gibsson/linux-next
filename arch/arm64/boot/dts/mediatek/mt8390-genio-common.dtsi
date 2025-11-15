@@ -1056,7 +1056,7 @@
 	interrupts = <222 IRQ_TYPE_LEVEL_HIGH>;
 };
 
-&scp {
+&scp_c0 {
 	memory-region = <&scp_mem>;
 	status = "okay";
 };
